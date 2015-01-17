@@ -2,7 +2,7 @@ import re
 import os
 from functools import partial
 import luigi
-import requests
+import grequests
 
 CFG = luigi.configuration.get_config()
 conf = partial(CFG.get, 'lastfm')
@@ -14,12 +14,12 @@ FORMAT = 'json'
 RAW_DATA_DIR = conf('raw_data_dir', 'data.raw')
 CHUNK_SIZE = conf_int('stream_chunk_bytes', pow(2, 13))
 
-SESH = requests.Session()
+SESH = grequests.Session()
 SESH.params.update({'api_key': API_KEY, 'format': FORMAT})
 
 
 def api_get(**kwargs):
-    return SESH.get(API_URL, stream=True, params=kwargs)
+    return grequests.get(API_URL, session=SESH, stream=True, params=kwargs)
 
 
 class LoadTopArtists(luigi.Task):
@@ -33,7 +33,8 @@ class LoadTopArtists(luigi.Task):
 
     def run(self):
         # send the request
-        r = api_get(method=self.api_method, limit=self.limit)
+        req = api_get(method=self.api_method, limit=self.limit)
+        r = grequests.send(req).get()
         r.raise_for_status()
         # stream the response content into a file
         with self.output().open('w') as output:
@@ -44,13 +45,20 @@ class LoadTopArtists(luigi.Task):
 class LoadTopTags(luigi.Task):
     """Loads top tags for the top artists using Last.fm API"""
     api_method = 'artist.getTopTags'
-    mbid = luigi.Parameter()
+    mbid_re = re.compile("{h}{{8}}-{h}{{4}}-{h}{{4}}-{h}{{4}}-{h}{{12}}".format(
+        h="[a-f0-9]"), re.IGNORECASE)
+
+    def requires(self):
+        LoadTopArtists()
 
     def output(self):
-        filename = 'tags_{mbid}.{ext}'.format(mbid=self.mbid, ext=FORMAT)
+        filename = 'top_tags.{ext}'.format(ext=FORMAT)
         return luigi.LocalTarget(os.path.join(RAW_DATA_DIR, filename))
 
     def run(self):
+        # parse mbid(s) from artists file
+        with self.input().open('r') as artists:
+            mbids = self.mbid_re.findall(f.read())
         # send the request
         r = api_get(method=self.api_method)
         r.raise_for_status()
@@ -58,21 +66,6 @@ class LoadTopTags(luigi.Task):
         with self.output().open('w') as output:
             for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
                 output.write(chunk)
-
-
-class LoadTopTagsForArtists(luigi.Task):
-    """Loads top tags for the top artists using Last.fm API"""
-    mbid_pattern = "{h}{{8}}-{h}{{4}}-{h}{{4}}-{h}{{4}}-{h}{{12}}".format(
-        h="[A-Fa-f0-9]")
-
-    def requires(self):
-        return LoadTopArtists()
-
-    def output(self):
-        with self.input().open('r') as artists:
-            mbids = re.findall(self.mbid_pattern, artists.read())
-        for mbid in mbids:
-            yield LoadTopTags(mbid=mbid)
 
 
 if __name__ == '__main__':
