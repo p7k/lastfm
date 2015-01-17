@@ -22,6 +22,11 @@ def api_get(**kwargs):
     return grequests.get(API_URL, session=SESH, stream=True, params=kwargs)
 
 
+def chunked_write(response, output):
+    for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
+        output.write(chunk)
+
+
 class LoadTopArtists(luigi.Task):
     """Loads top artists using Last.fm API"""
     api_method = 'chart.getTopArtists'
@@ -38,18 +43,22 @@ class LoadTopArtists(luigi.Task):
         r.raise_for_status()
         # stream the response content into a file
         with self.output().open('w') as output:
-            for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
-                output.write(chunk)
+            chunked_write(r, output)
 
 
 class LoadTopTags(luigi.Task):
-    """Loads top tags for the top artists using Last.fm API"""
+    """Loads top tags for the top artists using Last.fm API
+    Note: some artists are missing mbids
+          confirm with ` cat top_artists.json | egrep -o -e'mbid":""' | wc `
+    """
     api_method = 'artist.getTopTags'
-    mbid_re = re.compile("{h}{{8}}-{h}{{4}}-{h}{{4}}-{h}{{4}}-{h}{{12}}".format(
-        h="[a-f0-9]"), re.IGNORECASE)
+    pool_size = conf_int('pool_size', 10)
+    mbid_re = re.compile(
+        "{h}{{8}}-{h}{{4}}-{h}{{4}}-{h}{{4}}-{h}{{12}}".format(h="[a-f0-9]"),
+        re.IGNORECASE)
 
     def requires(self):
-        LoadTopArtists()
+        return LoadTopArtists()
 
     def output(self):
         filename = 'top_tags.{ext}'.format(ext=FORMAT)
@@ -58,14 +67,13 @@ class LoadTopTags(luigi.Task):
     def run(self):
         # parse mbid(s) from artists file
         with self.input().open('r') as artists:
-            mbids = self.mbid_re.findall(f.read())
-        # send the request
-        r = api_get(method=self.api_method)
-        r.raise_for_status()
+            mbids = self.mbid_re.findall(artists.read())
+        # prepare requests
+        reqs = (api_get(method=self.api_method, mbid=mbid) for mbid in mbids)
         # stream the response content into a file
         with self.output().open('w') as output:
-            for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
-                output.write(chunk)
+            for r in grequests.imap(reqs, size=self.pool_size):
+                chunked_write(r, output)
 
 
 if __name__ == '__main__':
