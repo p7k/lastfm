@@ -12,19 +12,13 @@ API_KEY = conf('api_key')
 API_URL = conf('api_url', 'http://ws.audioscrobbler.com/2.0/')
 FORMAT = 'json'
 RAW_DATA_DIR = conf('raw_data_dir', 'data.raw')
-CHUNK_SIZE = conf_int('stream_chunk_bytes', pow(2, 13))
 
 SESH = grequests.Session()
 SESH.params.update({'api_key': API_KEY, 'format': FORMAT})
 
 
 def api_get(**kwargs):
-    return grequests.get(API_URL, session=SESH, stream=True, params=kwargs)
-
-
-def chunked_write(response, output):
-    for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
-        output.write(chunk)
+    return grequests.get(API_URL, session=SESH, stream=False, params=kwargs)
 
 
 class LoadTopArtists(luigi.Task):
@@ -41,9 +35,9 @@ class LoadTopArtists(luigi.Task):
         req = api_get(method=self.api_method, limit=self.limit)
         r = grequests.send(req).get()
         r.raise_for_status()
-        # stream the response content into a file
-        with self.output().open('w') as output:
-            chunked_write(r, output)
+        # write response content into a file
+        with self.output().open('w') as out:
+            out.write(r.content)
 
 
 class LoadTopTags(luigi.Task):
@@ -71,9 +65,9 @@ class LoadTopTags(luigi.Task):
         # prepare requests
         reqs = (api_get(method=self.api_method, mbid=mbid) for mbid in mbids)
         # stream the response content into a file
-        with self.output().open('w') as output:
+        with self.output().open('w') as out:
             for r in grequests.imap(reqs, size=self.pool_size):
-                chunked_write(r, output)
+                out.write(r.content)
 
 
 if __name__ == '__main__':
