@@ -1,2 +1,2 @@
 luigi==1.0.19
-grequests
+requests-futures

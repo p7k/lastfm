@@ -2,29 +2,29 @@ import re
 import os
 from functools import partial
 import luigi
-import grequests
+from requests_futures.sessions import FuturesSession
 
 CFG = luigi.configuration.get_config()
 conf = partial(CFG.get, 'lastfm')
-conf_int = partial(CFG.getint, 'lastfm')
 
 API_KEY = conf('api_key')
 API_URL = conf('api_url', 'http://ws.audioscrobbler.com/2.0/')
 FORMAT = 'json'
 RAW_DATA_DIR = conf('raw_data_dir', 'data.raw')
+POOL_SIZE = int(conf('pool_size', 10))
+ARTIST_LIMIT = int(conf('top_artist_limit', 1000))
 
-SESH = grequests.Session()
+SESH = FuturesSession(max_workers=POOL_SIZE)
 SESH.params.update({'api_key': API_KEY, 'format': FORMAT})
 
 
 def api_get(**kwargs):
-    return grequests.get(API_URL, session=SESH, stream=False, params=kwargs)
+    return SESH.get(API_URL, params=kwargs)
 
 
 class LoadTopArtists(luigi.Task):
     """Loads top artists using Last.fm API"""
     api_method = 'chart.getTopArtists'
-    limit = conf_int('top_artist_limit', 1000)
 
     def output(self):
         filename = 'top_artists.{ext}'.format(ext=FORMAT)
@@ -32,12 +32,12 @@ class LoadTopArtists(luigi.Task):
 
     def run(self):
         # send the request
-        req = api_get(method=self.api_method, limit=self.limit)
-        r = grequests.send(req).get()
-        r.raise_for_status()
+        fut = api_get(method=self.api_method, limit=ARTIST_LIMIT)
+        response = fut.result()
+        response.raise_for_status()
         # write response content into a file
         with self.output().open('w') as out:
-            out.write(r.content)
+            out.write(response.content)
 
 
 class LoadTopTags(luigi.Task):
@@ -46,7 +46,6 @@ class LoadTopTags(luigi.Task):
           confirm with ` cat top_artists.json | egrep -o -e'mbid":""' | wc `
     """
     api_method = 'artist.getTopTags'
-    pool_size = conf_int('pool_size', 10)
     mbid_re = re.compile(
         "{h}{{8}}-{h}{{4}}-{h}{{4}}-{h}{{4}}-{h}{{12}}".format(h="[a-f0-9]"),
         re.IGNORECASE)
@@ -63,11 +62,13 @@ class LoadTopTags(luigi.Task):
         with self.input().open('r') as artists:
             mbids = self.mbid_re.findall(artists.read())
         # prepare requests
-        reqs = (api_get(method=self.api_method, mbid=mbid) for mbid in mbids)
+        futs = [api_get(method=self.api_method, mbid=mbid) for mbid in mbids]
         # stream the response content into a file
         with self.output().open('w') as out:
-            for r in grequests.imap(reqs, size=self.pool_size):
-                out.write(r.content)
+            for fut in futs:
+                response = fut.result()
+                response.raise_for_status()
+                out.write(response.content)
 
 
 if __name__ == '__main__':
