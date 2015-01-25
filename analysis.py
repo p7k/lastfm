@@ -2,14 +2,13 @@ import json
 import codecs
 import math
 import string
-from itertools import islice, izip, repeat
-from operator import itemgetter
 from collections import OrderedDict
 
 
 def normalize_tag_term(tag, exclude_punctuation=False):
     """a little naive in stripping all punctuation.
-    stemming would deal with sementically identical syntax variations: electronic, electronica, electro"""
+    stemming would deal with sementically identical syntax variations:
+    electronic, electronica, electro"""
     tag = tag.strip().lower()
     if exclude_punctuation:
         tag = tag.translate(dict.fromkeys(map(ord, string.punctuation)))
@@ -30,7 +29,8 @@ def load_tags_data(tags_file, encoding='utf-8'):
             top_tags = json.loads(line)['toptags']
             # artists (documents) store only unique artists
             artist = top_tags['@attr']['artist']
-            artist_id = artist_artist_id.setdefault(artist, len(artist_artist_id))
+            artist_id = artist_artist_id.setdefault(artist,
+                                                    len(artist_artist_id))
             # tag name and count (terms and frequency)
             for raw_tag in top_tags['tag']:
                 tag = normalize_tag_term(raw_tag['name'])
@@ -53,18 +53,19 @@ def load_tags_data(tags_file, encoding='utf-8'):
             artist_tags, tag_artists, tag_artist_count)
 
 
-artist_artist_id, tag_tag_id, artist_tags, tag_artists, tag_artist_count = load_tags_data('data.raw/top_tags.json')
+artist_artist_id, tag_tag_id, artist_tags, tag_artists, tag_artist_count = \
+    load_tags_data('data.raw/top_tags.json')
 
 artist_names = tuple(artist_artist_id.iterkeys())
 tag_names = tuple(tag_tag_id.iterkeys())
 
 
-###### local tag (term) weight [ normalized term frequency ]
+# ##### local tag (term) weight [ normalized term frequency ]
 
 
-# looks like they've already normalized local weights 'count' is always between 0-100
-# zero-based nature of that normalization may cause issues with rest of the analysis
-# might be worth experinenting and normalizing it further with logrithms 
+# looks like they've already normalized local weights 'count' is always between
+# 0-100 zero-based nature of that normalization may cause issues with rest of
+# the analysis might be worth experinenting and normalizing it further with log
 def build_local_tag_weights(tag_artist_count):
     ret = dict()
     for tag, artist_count in tag_artist_count.iteritems():
@@ -77,7 +78,7 @@ def build_local_tag_weights(tag_artist_count):
 local_tag_weights = build_local_tag_weights(tag_artist_count)
 
 
-###### global tag (term) weight (inverse document frequency)
+# ##### global tag (term) weight (inverse document frequency)
 
 # penalize generic tags
 
@@ -96,37 +97,46 @@ def build_global_tag_weights(n_artists, tag_artists):
 global_tag_weights = build_global_tag_weights(len(artist_names), tag_artists)
 
 
-###### compensate for document length (artist tag count) differences using cosine normalization
+# ##### compensate for document length (artist tag count) differences using
+# ##### cosine normalization
 
 # used to correct discrepancies in document lengths.
 # E.g. In case of tagging systems, a resource that has been given more tags,
 # will be favoured if weights are not normalized.
-# Since it is not always true that a resource that has been given more number of tags
+# Since it is not always true that a resource that has been given more tags
 # is more relevant than a resource with lesser number of tags.
-# Hence, it is useful to normalize the document vectors so that documents are not favoured based on their lengths.
+# Hence, it is useful to normalize the document vectors so that documents are
+# not favoured based on their lengths.
 
 def cos_norm(global_local_tag_weights):
-    return 1. / math.sqrt(sum((gtw * ltw)**2 for gtw, ltw in global_local_tag_weights))
+    return 1. / math.sqrt(sum((gtw * ltw)**2 for gtw, ltw in
+                              global_local_tag_weights))
 
 
-def build_normalized_artist_weights(artist_tags, local_tag_weights, global_tag_weights):
+def build_normalized_artist_weights(artist_tags, local_tag_weights,
+                                    global_tag_weights):
     """returns dict artist_id -> combined_weight"""
     ret = dict()
     for artist_id, tags in artist_tags.iteritems():
-        gtw_ltw = ((global_tag_weights[tag], local_tag_weights[tag][artist_id]) for tag in tags)
+        gtw_ltw = ((global_tag_weights[tag], local_tag_weights[tag][artist_id])
+                   for tag in tags)
         ret[artist_id] = cos_norm(gtw_ltw)
     return ret
 
-normalized_artist_weights = build_normalized_artist_weights(artist_tags, local_tag_weights, global_tag_weights)
+normalized_artist_weights = build_normalized_artist_weights(artist_tags,
+                                                            local_tag_weights,
+                                                            global_tag_weights)
 
 
-###### combined weights (artists and tags)
+# ##### combined weights (artists and tags)
 
-def combined_weight(local_tag_weight, global_tag_weight, normalized_artist_weight):
+def combined_weight(local_tag_weight, global_tag_weight,
+                    normalized_artist_weight):
     return local_tag_weight * global_tag_weight * normalized_artist_weight
 
 
-def build_combined_weights(tag_artists, local_tag_weights, global_tag_weights, normalized_artist_weights):
+def build_combined_weights(tag_artists, local_tag_weights, global_tag_weights,
+                           normalized_artist_weights):
     """return dict tag -> artist -> weight"""
     ret = dict()
     for tag, artists in tag_artists.iteritems():
@@ -140,15 +150,18 @@ def build_combined_weights(tag_artists, local_tag_weights, global_tag_weights, n
     return ret
 
 
-combined_weights = build_combined_weights(tag_artists, local_tag_weights, global_tag_weights, normalized_artist_weights)
+combined_weights = build_combined_weights(tag_artists, local_tag_weights,
+                                          global_tag_weights,
+                                          normalized_artist_weights)
 
 
-###### dice similarities
+# ##### dice similarities
 
 def build_weighted_dice_similarities(tag_artists, combined_weights):
     n_tags = len(tag_names)
-    tag_artists = tuple(artists for _, artists in sorted(tag_artists.iteritems()))
-    empty_dict = {}
+    tag_artists = tuple(artists for _, artists in
+                        sorted(tag_artists.iteritems()))
+    empty = {}
     ret = dict()
 
     # weighted dice similarity calc
@@ -156,29 +169,34 @@ def build_weighted_dice_similarities(tag_artists, combined_weights):
         artists_i = tag_artists[tag_i]
         for tag_j in xrange(tag_i + 1, n_tags):
             artists_j = tag_artists[tag_j]
+            # common artists; if none, will be zero, hence skip
             common_artists = artists_i & artists_j
             if not common_artists:
                 continue
-            # calc sum of element-wise multiplication of weights for tag_i tag_j for common artists
+            # sum of element-wise multiplication of weights for tag_i & tag_j
+            # for common artists; skip zeros
             sum_common = 0
             for common_artist in common_artists:
-                sum_common += combined_weights.get(tag_i, empty_dict).get(common_artist, 0) * combined_weights.get(tag_j, empty_dict).get(common_artist, 0)
-            if not sum_common:
+                cwi = combined_weights.get(tag_i, empty).get(common_artist, 0)
+                cwj = combined_weights.get(tag_j, empty).get(common_artist, 0)
+                sum_common += cwi * cwj
+            if sum_common == 0:
                 continue
             # calc weight sums for tag_i and tag_j across all artists
             sum_i = sum(combined_weights[tag_i].itervalues())
             sum_j = sum(combined_weights[tag_j].itervalues())
             similarity = sum_common // (sum_i + sum_j)
-            if not similarity:
+            if similarity == 0:
                 continue
             ret.setdefault(tag_i, dict())[tag_j] = similarity
     return ret
 
 
-weighted_dice_similarities = build_weighted_dice_similarities(tag_artists, combined_weights)
+weighted_dice_similarities = build_weighted_dice_similarities(tag_artists,
+                                                              combined_weights)
 
 
-##### persist to disk
+# #### persist to disk
 
 with open('data.proc/tag_similarities.csv', 'w') as f:
     for tag_i, tag_j_similarity in weighted_dice_similarities.iteritems():
