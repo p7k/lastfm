@@ -1,5 +1,5 @@
-import json
 import codecs
+import json
 import math
 import string
 from collections import OrderedDict
@@ -53,15 +53,7 @@ def load_tags_data(tags_file, encoding='utf-8'):
             artist_tags, tag_artists, tag_artist_count)
 
 
-artist_artist_id, tag_tag_id, artist_tags, tag_artists, tag_artist_count = \
-    load_tags_data('data.raw/top_tags.json')
-
-artist_names = tuple(artist_artist_id.iterkeys())
-tag_names = tuple(tag_tag_id.iterkeys())
-
-
 # ##### local tag (term) weight [ normalized term frequency ]
-
 
 # looks like they've already normalized local weights 'count' is always between
 # 0-100 zero-based nature of that normalization may cause issues with rest of
@@ -73,9 +65,6 @@ def build_local_tag_weights(tag_artist_count):
             ret.setdefault(tag, dict())[artist] = (math.lgamma(count + 1) + .1)
 #             ret.setdefault(tag, dict())[artist] = count + 1
     return ret
-
-
-local_tag_weights = build_local_tag_weights(tag_artist_count)
 
 
 # ##### global tag (term) weight (inverse document frequency)
@@ -92,9 +81,6 @@ def build_global_tag_weights(n_artists, tag_artists):
     for tag, artists in tag_artists.iteritems():
         ret[tag] = idf(n_artists, len(artists))
     return ret
-
-
-global_tag_weights = build_global_tag_weights(len(artist_names), tag_artists)
 
 
 # ##### compensate for document length (artist tag count) differences using
@@ -123,10 +109,6 @@ def build_normalized_artist_weights(artist_tags, local_tag_weights,
         ret[artist_id] = cos_norm(gtw_ltw)
     return ret
 
-normalized_artist_weights = build_normalized_artist_weights(artist_tags,
-                                                            local_tag_weights,
-                                                            global_tag_weights)
-
 
 # ##### combined weights (artists and tags)
 
@@ -150,15 +132,10 @@ def build_combined_weights(tag_artists, local_tag_weights, global_tag_weights,
     return ret
 
 
-combined_weights = build_combined_weights(tag_artists, local_tag_weights,
-                                          global_tag_weights,
-                                          normalized_artist_weights)
-
-
 # ##### dice similarities
 
 def build_weighted_dice_similarities(tag_artists, combined_weights):
-    n_tags = len(tag_names)
+    n_tags = len(tag_artists)
     tag_artists = tuple(artists for _, artists in
                         sorted(tag_artists.iteritems()))
     empty = {}
@@ -192,8 +169,29 @@ def build_weighted_dice_similarities(tag_artists, combined_weights):
     return ret
 
 
-weighted_dice_similarities = build_weighted_dice_similarities(tag_artists,
-                                                              combined_weights)
+def main():
+    artist_artist_id, tag_tag_id, artist_tags, tag_artists, tag_artist_count = \
+        load_tags_data('data.raw/top_tags.json')
+
+    artist_names = tuple(artist_artist_id.iterkeys())
+    tag_names = tuple(tag_tag_id.iterkeys())
+
+    # build weights
+    global_tag_weights = build_global_tag_weights(len(artist_names),
+                                                  tag_artists)
+    local_tag_weights = build_local_tag_weights(tag_artist_count)
+
+    normalized_artist_weights = build_normalized_artist_weights(
+        artist_tags, local_tag_weights, global_tag_weights)
+
+    combined_weights = build_combined_weights(tag_artists, local_tag_weights,
+                                              global_tag_weights,
+                                              normalized_artist_weights)
+
+    # build similarities
+    weighted_dice_similarities = build_weighted_dice_similarities(
+        tag_artists, combined_weights)
+
 
 
 # #### persist to disk
