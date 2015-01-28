@@ -1,4 +1,3 @@
-import codecs
 import json
 import math
 import string
@@ -15,39 +14,39 @@ def normalize_tag_term(tag, exclude_punctuation=False):
     return tag
 
 
-def load_tags_data(tags_file, encoding='utf-8'):
+def load_tags_data(raw_tags_stream):
     artist_artist_id = OrderedDict()  # artists -> artist_id
     tag_tag_id = OrderedDict()        # tags -> artist_id
-    artist_tags = dict()       # artist_id -> {tag}
-    tag_artists = dict()       # tag -> {artist_id}
-    tag_artist_count = dict()  # tag -> artist_id -> count
+
+    artist_tags = dict()              # artist_id -> {tag}
+    tag_artists = dict()              # tag -> {artist_id}
+    tag_artist_count = dict()         # tag -> artist_id -> count
 
     # load data
-    with codecs.open(tags_file, 'r') as f:
-        for line in f:
-            # decode json
-            top_tags = json.loads(line)['toptags']
-            # artists (documents) store only unique artists
-            artist = top_tags['@attr']['artist']
-            artist_id = artist_artist_id.setdefault(artist,
-                                                    len(artist_artist_id))
-            # tag name and count (terms and frequency)
-            for raw_tag in top_tags['tag']:
-                tag = normalize_tag_term(raw_tag['name'])
-                # skip empty tags
-                if not tag:
-                    print 'warning: skipping empty tag [raw: "{}"]'.format(
-                        raw_tag['name'])
-                    continue
-                # store only unique tags
-                tag_id = tag_tag_id.setdefault(tag, len(tag_tag_id))
-                # store tag counts for each artist
-                count = int(raw_tag['count'])
-                tag_artist_count.setdefault(tag_id, dict())[artist_id] = count
-                # store artist tag sets
-                artist_tags.setdefault(artist_id, set()).add(tag_id)
-                # store tag artist sets
-                tag_artists.setdefault(tag_id, set()).add(artist_id)
+    for line in raw_tags_stream:
+        # decode json
+        top_tags = json.loads(line)['toptags']
+        # artists (documents) store only unique artists
+        artist = top_tags['@attr']['artist']
+        artist_id = artist_artist_id.setdefault(artist,
+                                                len(artist_artist_id))
+        # tag name and count (terms and frequency)
+        for raw_tag in top_tags['tag']:
+            tag = normalize_tag_term(raw_tag['name'])
+            # skip empty tags
+            if not tag:
+                print 'warning: skipping empty tag [raw: "{}"]'.format(
+                    raw_tag['name'])
+                continue
+            # store only unique tags
+            tag_id = tag_tag_id.setdefault(tag, len(tag_tag_id))
+            # store tag counts for each artist
+            count = int(raw_tag['count'])
+            tag_artist_count.setdefault(tag_id, dict())[artist_id] = count
+            # store artist tag sets
+            artist_tags.setdefault(artist_id, set()).add(tag_id)
+            # store tag artist sets
+            tag_artists.setdefault(tag_id, set()).add(artist_id)
 
     return (artist_artist_id, tag_tag_id,
             artist_tags, tag_artists, tag_artist_count)
@@ -169,9 +168,9 @@ def build_weighted_dice_similarities(tag_artists, combined_weights):
     return ret
 
 
-def main():
+def analyze_tags(raw_tags_stream):
     artist_artist_id, tag_tag_id, artist_tags, tag_artists, tag_artist_count = \
-        load_tags_data('data.raw/top_tags.json')
+        load_tags_data(raw_tags_stream)
 
     artist_names = tuple(artist_artist_id.iterkeys())
     tag_names = tuple(tag_tag_id.iterkeys())
@@ -192,24 +191,4 @@ def main():
     weighted_dice_similarities = build_weighted_dice_similarities(
         tag_artists, combined_weights)
 
-
-
-# #### persist to disk
-
-with open('data.proc/tag_similarities.csv', 'w') as f:
-    for tag_i, tag_j_similarity in weighted_dice_similarities.iteritems():
-        for tag_j, similarity in tag_j_similarity.iteritems():
-            f.write(",".join(map(str, (tag_i, tag_j, similarity))))
-            f.write('\n')
-
-
-with codecs.open('data.proc/artists', 'w', encoding='utf-8') as f:
-    for artist_name in artist_names:
-        f.write(artist_name)
-        f.write('\n')
-
-
-with codecs.open('data.proc/tags', 'w', encoding='utf-8') as f:
-    for tag_name in tag_names:
-        f.write(tag_name)
-        f.write('\n')
+    return weighted_dice_similarities, artist_names, tag_names

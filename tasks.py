@@ -1,8 +1,12 @@
 import re
 import os
+import codecs
 from functools import partial
 import luigi
 from requests_futures.sessions import FuturesSession
+
+import analysis
+
 
 CFG = luigi.configuration.get_config()
 conf = partial(CFG.get, 'lastfm')
@@ -11,8 +15,12 @@ API_KEY = conf('api_key')
 API_URL = conf('api_url', 'http://ws.audioscrobbler.com/2.0/')
 FORMAT = 'json'
 RAW_DATA_DIR = conf('raw_data_dir', 'data.raw')
+PROC_DATA_DIR = conf('proc_data_dir', 'data.proc')
 POOL_SIZE = int(conf('pool_size', 10))
 ARTIST_LIMIT = int(conf('top_artist_limit', 1000))
+
+UTF8Reader = codecs.getreader('utf8')
+UTF8Writer = codecs.getwriter('utf8')
 
 SESH = FuturesSession(max_workers=POOL_SIZE)
 SESH.params.update({'api_key': API_KEY, 'format': FORMAT})
@@ -69,6 +77,47 @@ class LoadTopTags(luigi.Task):
                 response = fut.result()
                 response.raise_for_status()
                 out.write(response.content)
+
+
+class AnalyzeTagSimilarities(luigi.Task):
+    # sensitivity = luigi.IntegerParameter(default=)
+
+    def requires(self):
+        return LoadTopTags()
+
+    def output(self):
+        path = partial(os.path.join, PROC_DATA_DIR)
+        return [luigi.LocalTarget(path('similarities.csv')),
+                luigi.LocalTarget(path('artists')),
+                luigi.LocalTarget(path('tags'))]
+
+    def run(self):
+        # analyze tags
+        with self.input().open() as raw_tags_stream:
+            raw_tags_stream = UTF8Reader(raw_tags_stream)
+            similarities, artists, tags = \
+                analysis.analyze_tags(raw_tags_stream)
+
+        # write out similarities
+        with self.output()[0].open('w') as out:
+            for tag_i, tag_j_similarity in similarities.iteritems():
+                for tag_j, similarity in tag_j_similarity.iteritems():
+                    out.write('{},{},{}'.format(tag_i, tag_j, similarity))
+                    out.write('\n')
+
+        # write out artists
+        with self.output()[1].open('w') as out:
+            out = UTF8Writer(out)
+            for artist in artists:
+                out.write(artist)
+                out.write('\n')
+
+        # write out tags
+        with self.output()[2].open('w') as out:
+            out = UTF8Writer(out)
+            for tag in tags:
+                out.write(tag)
+                out.write('\n')
 
 
 if __name__ == '__main__':
